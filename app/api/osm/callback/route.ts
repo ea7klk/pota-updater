@@ -9,6 +9,7 @@ export async function GET(request: Request) {
   const clientId = process.env.OSM_CLIENT_ID?.trim();
   if (!code || !state || !savedState || state !== savedState || !verifier || !clientId) return new Response("Invalid OSM OAuth callback", { status: 400 });
   const redirectUri = process.env.OSM_REDIRECT_URI || url.origin + "/api/osm/callback";
+  const publicOrigin = new URL(redirectUri).origin;
   const tokenRequest = new URLSearchParams({ grant_type: "authorization_code", code, client_id: clientId, redirect_uri: redirectUri, code_verifier: verifier });
   const clientSecret = process.env.OSM_CLIENT_SECRET?.trim();
   if (clientSecret && process.env.OSM_OAUTH_CONFIDENTIAL === "true") tokenRequest.set("client_secret", clientSecret);
@@ -20,8 +21,8 @@ export async function GET(request: Request) {
   }
   const token = await tokenResponse.json() as { access_token?: string };
   if (!token.access_token) return new Response("OSM did not return an access token", { status: 502 });
-  const secure = url.protocol === "https:" ? "; Secure" : "";
-  const response = new Response(null, { status: 302, headers: { Location: url.origin + "/?osm=connected" } });
+  const secure = publicOrigin.startsWith("https:") ? "; Secure" : "";
+  const response = new Response(null, { status: 302, headers: { Location: publicOrigin + "/?osm=connected" } });
   response.headers.append("set-cookie", "osm_access_token=" + token.access_token + "; HttpOnly" + secure + "; SameSite=Lax; Path=/; Max-Age=2592000");
   return response;
 }
