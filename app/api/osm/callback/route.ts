@@ -21,7 +21,7 @@ export async function GET(request: Request) {
   const token = await tokenResponse.json() as { access_token?: string };
   if (!token.access_token) return new Response("OSM did not return an access token", { status: 502 });
   const secure = url.protocol === "https:" ? "; Secure" : "";
-  const response = Response.redirect(url.origin + "/?osm=connected", 302);
+  const response = new Response(null, { status: 302, headers: { Location: url.origin + "/?osm=connected" } });
   response.headers.append("set-cookie", "osm_access_token=" + token.access_token + "; HttpOnly" + secure + "; SameSite=Lax; Path=/; Max-Age=2592000");
   return response;
 }
