@@ -11,24 +11,31 @@ skinparam DatabaseBackgroundColor #F7F8FA
 skinparam DatabaseBorderColor #94A3B8
 actor "OSM contributor" as contributor
 component "POTA → OSM\nweb app" as app
+component "Leaflet map\nvisible bbox" as map
 component "Reconciliation API" as reconcile
 component "Progress stream\nNDJSON" as progress
 component "OSM OAuth 2.0\n(PKCE)" as oauth
 component "OSM API" as osm
 database "OSM access token\nHttpOnly cookie" as token
 component "Overpass interpreter" as overpass
+component "Unmapped parks API" as unmapped
 component "Photon + Nominatim\npublic OSM search" as osmsearch
 component "POTA CSV" as pota
 component "OsmChange (.osc)\ngenerator" as osc
-contributor --> app : select scope, review, approve
+contributor --> app : move map, confirm, review, approve
+app --> map : render active unmapped points
+map --> unmapped : GET visible bbox
+unmapped --> pota : fetch active catalogue
+unmapped --> overpass : query tagged refs in bbox
+unmapped --> map : unmapped points
 app --> oauth : connect account
 oauth --> osm : authorize + token exchange
 oauth --> token : set session
-app --> reconcile : POST country + region
+app --> reconcile : POST visible bbox
 reconcile --> progress : emit phase + counters
 progress --> app : streamed progress events
-reconcile --> pota : fetch active park catalogue
-reconcile --> overpass : query existing POTA entities
+reconcile --> pota : fetch active park catalogue in bbox
+reconcile --> overpass : query existing POTA entities in bbox
 reconcile --> osmsearch : fuzzy + partial OSM search
 reconcile --> app : ranked suggestions
 app --> osc : approved matches
@@ -36,6 +43,9 @@ osc --> app : download .osc
 app --> osm : explicit diff upload
 token ..> app : authenticated write context
 note right of reconcile
+  Candidate search is limited to a
+  confirmed visible bbox of at most
+  20,000 km².
   Matching is review-first:
   exact names and proximity
   inform confidence, but never

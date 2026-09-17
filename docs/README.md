@@ -4,14 +4,15 @@ This app is a review-first workspace for bringing active entries from the POTA e
 
 ## Workflow
 
-1. Select a country and region loaded from the active POTA CSV catalog.
-2. The reconciliation route fetches the active POTA CSV rows and queries the configured Overpass interpreter only for existing tagged entities.
-3. Candidate matches come from public OpenStreetMap search services: Photon first, with Nominatim as a fallback when Photon is unavailable. Partial names, fuzzy similarity, proximity, and object type are used for ranking; ways and relations are prioritized over nodes. Existing tagged entities are excluded.
-4. Search results are independently checked against the OSM object API; any object that already has `communication:amateur_radio:pota` is discarded, even if Overpass did not return it.
-5. Up to 500 active parks are searched per reconciliation. Regional scopes smaller than that are searched completely. Requests are queued with low concurrency and per-source delays so public services are not flooded.
-6. Multiple candidates may be shown for one POTA park, but the review UI allows only one approved candidate per POTA reference.
-7. A contributor approves individual suggestions.
-8. The app generates an OsmChange .osc file containing only approved modifications to existing OSM objects. The file should be inspected in JOSM before upload.
+1. The Leaflet map displays active POTA catalogue points that are not already represented by a `communication:amateur_radio:pota` reference returned by the Overpass service.
+2. The visible map bounding box must be no larger than 20,000 km². The app warns and disables candidate search until the contributor zooms in.
+3. The contributor confirms **Find candidates in the displayed map**. The reconciliation route fetches the active POTA CSV, limits it to the current bounding box, and checks Overpass again before searching.
+4. Candidate matches come from public OpenStreetMap search services: Photon first, with Nominatim as a fallback when Photon is unavailable. Partial names, fuzzy similarity, proximity, and object type are used for ranking; ways and relations are prioritized over nodes. Existing tagged references are excluded.
+5. Search results are independently checked against the OSM object API; any object that already has `communication:amateur_radio:pota` is discarded, even if Overpass did not return it.
+6. Requests are queued with low concurrency and per-source delays so public services are not flooded.
+7. Multiple candidates may be shown for one POTA park, but the review UI allows only one approved candidate per POTA reference.
+8. A contributor approves individual suggestions.
+9. The app generates an OsmChange .osc file containing only approved modifications to existing OSM objects. The file should be inspected in JOSM before upload.
 
 The UI does not fall back to mock candidate data. If live reconciliation cannot verify a candidate safely, it is omitted and the user sees the live-source result instead.
 
@@ -26,7 +27,7 @@ For local development, use `http://127.0.0.1:5173/` and register `http://127.0.0
 
 The app requests `read_prefs`, `write_api`, `write_changeset_comments`, and `openid`. The access token is stored in an HttpOnly, SameSite cookie and is marked Secure when the app is served over HTTPS. The UI offers both a downloadable .osc file and an explicit Upload to OSM action after approval; it never uploads from the suggestion queue without that user action.
 
-The production implementation should add server-side session storage, token rotation/revocation, rate limiting, and a server-side membership/authorization policy before enabling direct diff uploads. The scope catalog is cached in memory for 24 hours and refreshed from the POTA CSV on the first request after expiry.
+The production implementation should add server-side session storage, token rotation/revocation, rate limiting, and a server-side membership/authorization policy before enabling direct diff uploads. The POTA catalogue used by the map is cached in memory for 24 hours and refreshed from the CSV on the first request after expiry.
 
 ## Local development
 
@@ -38,7 +39,7 @@ Use the bundled Node runtime if node is not on PATH:
 The local preview is served on loopback by default. External integrations use HTTPS endpoints:
 
 - POTA CSV: https://pota.app/all_parks_ext.csv
-- Overpass: https://overpass.ea7klk.es/api/interpreter (existing-tag detection only)
+- Overpass: https://overpass.ea7klk.es/api/interpreter (unmapped map layer and existing-tag detection)
 - Photon: https://photon.komoot.io/api/ (primary OSM candidate search)
 - Nominatim: https://nominatim.openstreetmap.org/search (fallback OSM candidate search)
 - OSM OAuth: https://www.openstreetmap.org/oauth2/authorize and /oauth2/token

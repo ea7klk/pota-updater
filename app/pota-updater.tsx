@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Activity, ArrowRight, Check, CheckCircle2, ChevronDown, CircleHelp, ExternalLink, FileDown, Globe2, History, LoaderCircle, Map, Radio, RefreshCw, Search, ShieldCheck, SlidersHorizontal, Sparkles, UploadCloud } from "lucide-react";
+import { Activity, ArrowRight, Check, CheckCircle2, ChevronDown, CircleHelp, ExternalLink, FileDown, Globe2, History, LoaderCircle, Map, Radio, Search, ShieldCheck, Sparkles, UploadCloud } from "lucide-react";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -15,30 +15,31 @@ import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { Toaster } from "@/components/ui/sonner";
+import { ParkMap } from "./park-map";
+import type { MapViewportState } from "./park-map";
 
 type Candidate = { id: string; name: string; code: string; region: string; country: string; lat: number; lon: number; confidence: number; matchType: "exact" | "near" | "review"; osmType: "node" | "way" | "relation"; osmId: string; osmName: string; tags: Record<string, string> };
-type ScopeOption = { value: string; label: string; regions: Array<{ value: string; label: string }> };
 type OsmUser = { display_name?: string; id?: number };
 type ReconciliationProgress = { phase: string; message: string; completed: number; total: number; candidateCount: number; existing: number };
-
-const fallbackScopes: ScopeOption[] = [
-  { value: "DE", label: "Germany", regions: [{ value: "BY", label: "BY" }] },
-  { value: "ES", label: "Spain", regions: [{ value: "AN", label: "AN" }] },
-  { value: "US", label: "United States", regions: [{ value: "CO", label: "CO" }] },
-  { value: "GB", label: "United Kingdom", regions: [{ value: "SCT", label: "SCT" }] },
-];
 
 const stepLabels = ["Scope", "Reconcile", "Review", "Prepare upload"];
 const initials = (name: string) => name.split(/[ @]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 const matchLabel = (type: Candidate["matchType"]) => type === "exact" ? "Exact name" : type === "near" ? "Nearby match" : "Needs review";
+const uniqueSelection = (ids: string[], candidates: Candidate[]) => {
+  const seen = new Set<string>();
+  return ids.filter((id) => {
+    const candidate = candidates.find((item) => item.id === id);
+    if (!candidate || seen.has(candidate.code)) return false;
+    seen.add(candidate.code);
+    return true;
+  });
+};
 
 export function PotaUpdater() {
-  const [scopeOptions, setScopeOptions] = useState<ScopeOption[]>(fallbackScopes);
-  const [country, setCountry] = useState("DE");
-  const [region, setRegion] = useState("BY");
-  const [activeStep, setActiveStep] = useState(2);
+  const [activeStep, setActiveStep] = useState(0);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [scopeStats, setScopeStats] = useState({ total: 0, existing: 0 });
+  const [viewport, setViewport] = useState<MapViewportState | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -51,32 +52,10 @@ export function PotaUpdater() {
   const [changesetComment, setChangesetComment] = useState("Add missing POTA park references");
   useEffect(() => {
     let mounted = true;
-    if (new URLSearchParams(window.location.search).get("osm") === "connected") setIsConnected(true);
     fetch("/api/osm/session").then((response) => response.json() as Promise<{ connected?: boolean; user?: OsmUser | null }>).then((payload) => { if (mounted) { setIsConnected(Boolean(payload.connected)); setOsmUser(payload.user ?? null); } }).catch(() => undefined);
-    fetch("/api/catalog").then((response) => response.json() as Promise<{ countries?: ScopeOption[] }>).then((payload) => {
-      if (!mounted || !payload.countries?.length) return;
-      setScopeOptions(payload.countries);
-      const first = payload.countries.find((entry) => entry.value === "DE") ?? payload.countries[0];
-      setCountry(first.value);
-      setRegion(first.regions[0]?.value ?? "");
-      setCandidates([]);
-      setSelected([]);
-      setScopeStats({ total: 0, existing: 0 });
-    }).catch(() => undefined);
     return () => { mounted = false; };
   }, []);
 
-  const selectedCountry = scopeOptions.find((entry) => entry.value === country) ?? scopeOptions[0];
-  useEffect(() => {
-    const seen = new Set<string>();
-    const unique = selected.filter((id) => {
-      const candidate = candidates.find((item) => item.id === id);
-      if (!candidate || seen.has(candidate.code)) return false;
-      seen.add(candidate.code);
-      return true;
-    });
-    if (unique.length !== selected.length) setSelected(unique);
-  }, [selected, candidates]);
   const filteredCandidates = useMemo(() => candidates.filter((candidate) => {
     const matchesQuery = `${candidate.name} ${candidate.code} ${candidate.osmName}`.toLowerCase().includes(query.toLowerCase());
     return matchesQuery && (statusFilter === "all" || candidate.matchType === statusFilter);
@@ -90,18 +69,16 @@ export function PotaUpdater() {
     if (!candidate) return current;
     return [...current.filter((item) => candidates.find((itemCandidate) => itemCandidate.id === item)?.code !== candidate.code), id];
   });
-  const setCountryAndRegion = (value: string) => {
-    const nextRegion = scopeOptions.find((entry) => entry.value === value)?.regions[0]?.value ?? "";
-    setCountry(value); setRegion(nextRegion); setCandidates([]); setSelected([]); setScopeStats({ total: 0, existing: 0 });
-  };
-  const setScopeRegion = (value: string) => {
-    setRegion(value); setCandidates([]); setSelected([]); setScopeStats({ total: 0, existing: 0 });
+  const updateViewport = (next: MapViewportState) => {
+    setViewport(next);
+    if (!next.loading && !next.error) setScopeStats({ total: next.unmappedCount, existing: next.mappedInView });
   };
 
   async function reconcile() {
+    if (!viewport || viewport.loading || viewport.error) { toast.error("Choose a valid map view", { description: "Zoom in until the visible map is no more than 20,000 km² and wait for the unmapped parks to load." }); return; }
     setIsReconciling(true); setReconciliationProgress({ phase: "starting", message: "Starting reconciliation…", completed: 0, total: 0, candidateCount: 0, existing: 0 }); setActiveStep(1);
     try {
-      const response = await fetch("/api/reconcile", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ country, region }) });
+      const response = await fetch("/api/reconcile", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ bbox: viewport.bbox }) });
       if (!response.ok || !response.body) throw new Error("The reconciliation stream was unavailable.");
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
@@ -135,7 +112,7 @@ export function PotaUpdater() {
       }
       const nextCandidates = payload.candidates ?? [];
       setCandidates(nextCandidates);
-      setSelected(nextCandidates.slice(0, 3).map((candidate) => candidate.id));
+      setSelected(uniqueSelection(nextCandidates.slice(0, 3).map((candidate) => candidate.id), nextCandidates));
       setScopeStats({ total: payload.stats?.total ?? 0, existing: payload.stats?.existing ?? 0 });
       toast.success("Live CSV and OpenStreetMap search reconciled", { description: `${payload.stats?.total ?? candidates.length} active parks in scope · ${nextCandidates.length} proposed matches` });
     } catch (error) { setCandidates([]); setSelected([]); setScopeStats({ total: 0, existing: 0 }); toast.error("Reconciliation failed", { description: error instanceof Error ? error.message : "POTA or OSM search data is unavailable." }); }
@@ -185,15 +162,15 @@ export function PotaUpdater() {
           </aside>
 
           <main className="min-w-0 px-4 py-5 sm:px-8 sm:py-8"><div className="mx-auto max-w-[1160px]">
-            <div className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.17em] text-[#176b85]">Reconciliation workspace</p><h1 className="text-[clamp(1.8rem,3vw,2.7rem)] font-semibold tracking-[-0.05em] text-[#102b3d]">Keep POTA park data in sync with OSM.</h1><p className="mt-2 max-w-2xl text-[15px] leading-6 text-slate-500">Compare active parks against existing <code className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[13px] text-slate-700">communication:amateur_radio:pota=</code> entities, review likely matches, then prepare a safe changeset.</p></div><Button variant={isConnected ? "outline" : "default"} className={isConnected ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100" : "bg-[#123d5a] hover:bg-[#0b2e47]"} onClick={() => { if (isConnected) { fetch("/api/osm/logout").catch(() => undefined); setIsConnected(false); toast.message("OSM account disconnected"); } else connectOsm(); }}><Globe2 className="size-4" />{isConnected ? "OSM connected" : "Connect OSM account"}</Button></div>
+            <div className="mb-7 flex flex-col justify-between gap-4 md:flex-row md:items-end"><div><p className="mb-2 text-xs font-semibold uppercase tracking-[0.17em] text-[#176b85]">Reconciliation workspace</p><h1 className="text-[clamp(1.8rem,3vw,2.7rem)] font-semibold tracking-[-0.05em] text-[#102b3d]">Keep POTA park data in sync with OSM.</h1><p className="mt-2 max-w-2xl text-[15px] leading-6 text-slate-500">Move the map to an area you want to review. Active POTA parks without an OSM <code className="rounded bg-slate-200/70 px-1.5 py-0.5 text-[13px] text-slate-700">communication:amateur_radio:pota=</code> tag are shown for confirmation.</p></div><Button variant={isConnected ? "outline" : "default"} className={isConnected ? "border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100" : "bg-[#123d5a] hover:bg-[#0b2e47]"} onClick={() => { if (isConnected) { fetch("/api/osm/logout").catch(() => undefined); setIsConnected(false); toast.message("OSM account disconnected"); } else connectOsm(); }}><Globe2 className="size-4" />{isConnected ? "OSM connected" : "Connect OSM account"}</Button></div>
 
             <div className="mb-7 flex items-center gap-1 overflow-x-auto rounded-xl border border-slate-200 bg-white p-1.5 shadow-[0_8px_28px_rgb(15_23_42/4%)]">{stepLabels.map((label, index) => <button key={label} onClick={() => setActiveStep(index)} className={`flex min-w-max flex-1 items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition ${activeStep === index ? "bg-[#123d5a] text-white" : index < activeStep ? "text-[#176b85]" : "text-slate-400"}`}><span className={`grid size-5 place-items-center rounded-full text-[11px] ${activeStep === index ? "bg-white/15 text-white" : index < activeStep ? "bg-[#dceef2] text-[#176b85]" : "bg-slate-100 text-slate-400"}`}>{index < activeStep ? <Check className="size-3" /> : index + 1}</span>{label}{index < stepLabels.length - 1 && <ArrowRight className="ml-auto hidden size-3.5 opacity-35 md:block" />}</button>)}</div>
 
-            <Card className="mb-6 overflow-hidden border-slate-200 shadow-[0_14px_45px_rgb(15_23_42/5%)]"><CardHeader className="border-b border-slate-100 bg-white pb-4"><div className="flex items-start justify-between gap-4"><div><CardTitle className="flex items-center gap-2 text-base text-[#102b3d]"><SlidersHorizontal className="size-4 text-[#176b85]" />1. Define the update scope</CardTitle><p className="mt-1 text-sm text-slate-500">Only active POTA parks in this scope will be queried.</p></div><Badge variant="outline" className="border-slate-200 font-normal text-slate-500">{selectedCountry.label}</Badge></div></CardHeader><CardContent className="grid gap-4 bg-[#fcfdfe] p-5 md:grid-cols-[1fr_1fr_auto] md:items-end"><div className="space-y-2"><label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Country</label><Select value={country} onValueChange={setCountryAndRegion}><SelectTrigger className="w-full bg-white"><SelectValue /></SelectTrigger><SelectContent>{scopeOptions.map((entry) => <SelectItem key={entry.value} value={entry.value}>{entry.label}</SelectItem>)}</SelectContent></Select></div><div className="space-y-2"><label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Region</label><Select value={region} onValueChange={setScopeRegion}><SelectTrigger className="w-full bg-white"><SelectValue /></SelectTrigger><SelectContent>{selectedCountry.regions.map((entry) => <SelectItem key={entry.value} value={entry.value}>{entry.label}</SelectItem>)}</SelectContent></Select></div><Button onClick={reconcile} disabled={isReconciling} className="bg-[#176b85] hover:bg-[#11566b]">{isReconciling ? <LoaderCircle className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}Reconcile sources</Button></CardContent></Card>
+            <Card className="mb-6 overflow-hidden border-slate-200 shadow-[0_14px_45px_rgb(15_23_42/5%)]"><CardHeader className="border-b border-slate-100 bg-white pb-4"><div className="flex items-start justify-between gap-4"><div><CardTitle className="flex items-center gap-2 text-base text-[#102b3d]"><Map className="size-4 text-[#176b85]" />1. Select parks from the map</CardTitle><p className="mt-1 text-sm text-slate-500">The map follows the POTA map pattern: active catalogue points are shown only when Overpass confirms that the POTA reference is not already mapped.</p></div><Badge variant="outline" className="border-slate-200 font-normal text-slate-500">{viewport ? `${Math.round(viewport.areaKm2).toLocaleString()} km²` : "Loading map"}</Badge></div></CardHeader><CardContent className="space-y-4 bg-[#fcfdfe] p-5"><ParkMap onViewportState={updateViewport} /><div className="flex flex-col gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 sm:flex-row sm:items-center"><ShieldCheck className="size-4 shrink-0 text-amber-700" /><p><span className="font-semibold">Visible map limit: 20,000 km².</span> Zoom in when the view is larger. Only the currently visible bounding box is used to generate candidates.</p></div>{viewport?.error && <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">{viewport.error}</p>}<div className="flex flex-col justify-between gap-3 sm:flex-row sm:items-center"><p className="text-sm text-slate-500">{viewport?.loading ? "Checking Overpass and loading active unmapped parks…" : `${scopeStats.total.toLocaleString()} active unmapped parks currently visible`}</p><Button onClick={reconcile} disabled={isReconciling || !viewport || viewport.loading || Boolean(viewport.error)} className="bg-[#176b85] hover:bg-[#11566b]">{isReconciling ? <LoaderCircle className="size-4 animate-spin" /> : <Search className="size-4" />}Find candidates in the displayed map</Button></div></CardContent></Card>
 
-            <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Active parks in scope" value={String(scopeStats.total)} note="Live POTA CSV result" icon={<Globe2 />} /><Metric label="Already in OSM" value={String(scopeStats.existing)} note="Overpass + OSM tag verification" icon={<CheckCircle2 />} accent="emerald" /><Metric label="Suggested matches" value={String(candidates.length)} note="Ranked by normalized name + proximity" icon={<Sparkles />} accent="amber" /><Metric label="Approved for upload" value={String(selected.length)} note={`${progress}% of suggestions selected`} icon={<UploadCloud />} /></div>
+            <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4"><Metric label="Unmapped active parks in view" value={String(scopeStats.total)} note="POTA CSV minus Overpass-tagged refs" icon={<Globe2 />} /><Metric label="Already mapped in view" value={String(scopeStats.existing)} note="Excluded from candidates" icon={<CheckCircle2 />} accent="emerald" /><Metric label="Suggested matches" value={String(candidates.length)} note="Ranked by normalized name + proximity" icon={<Sparkles />} accent="amber" /><Metric label="Approved for upload" value={String(selected.length)} note={`${progress}% of suggestions selected`} icon={<UploadCloud />} /></div>
 
-            <Card className="border-slate-200 shadow-[0_14px_45px_rgb(15_23_42/5%)]"><CardHeader className="gap-4 border-b border-slate-100 pb-4"><div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center"><div><CardTitle className="text-base text-[#102b3d]">2. Review proposed matches</CardTitle><p className="mt-1 text-sm text-slate-500">Approve only matches that represent the same real-world park. {selected.length} selected.</p></div><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" onClick={() => setSelected(filteredCandidates.map((candidate) => candidate.id))}>Select visible</Button><Button variant="ghost" size="sm" onClick={() => setSelected([])}>Clear</Button></div></div><div className="flex flex-col gap-2 sm:flex-row"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-2.5 size-4 text-slate-400" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search park, POTA code, or OSM name" className="bg-white pl-9" /></div><Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-full bg-white sm:w-[170px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All suggestions</SelectItem><SelectItem value="exact">Exact name</SelectItem><SelectItem value="near">Nearby match</SelectItem><SelectItem value="review">Needs review</SelectItem></SelectContent></Select></div></CardHeader><CardContent className="p-0"><div className="hidden grid-cols-[40px_minmax(200px,1.4fr)_minmax(220px,1fr)_100px_100px] gap-4 border-b border-slate-100 bg-slate-50/70 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 md:grid"><span /><span>POTA park</span><span>OSM candidate</span><span>Match</span><span>Confidence</span></div><div className="divide-y divide-slate-100">{filteredCandidates.map((candidate) => <CandidateRow key={candidate.id} candidate={candidate} selected={selected.includes(candidate.id)} onToggle={() => toggleCandidate(candidate.id)} onInspect={() => setInspectCandidate(candidate)} />)}{filteredCandidates.length === 0 && <div className="p-10 text-center text-sm text-slate-500">No proposed matches meet this filter.</div>}</div></CardContent><div className="flex flex-col justify-between gap-3 border-t border-slate-100 bg-[#fcfdfe] px-5 py-4 sm:flex-row sm:items-center"><div className="flex items-center gap-2 text-sm text-slate-500"><span className="size-2 rounded-full bg-emerald-500" />Suggestions are read-only until approved</div><Button disabled={!selected.length} onClick={() => setShowUpload(true)} className="bg-[#123d5a] hover:bg-[#0b2e47]">Prepare changeset <ArrowRight className="size-4" /></Button></div></Card>
+            <Card className="border-slate-200 shadow-[0_14px_45px_rgb(15_23_42/5%)]"><CardHeader className="gap-4 border-b border-slate-100 pb-4"><div className="flex flex-col justify-between gap-4 lg:flex-row lg:items-center"><div><CardTitle className="text-base text-[#102b3d]">2. Review proposed matches</CardTitle><p className="mt-1 text-sm text-slate-500">Approve only matches that represent the same real-world park. {selected.length} selected.</p></div><div className="flex flex-wrap items-center gap-2"><Button variant="outline" size="sm" onClick={() => setSelected(uniqueSelection(filteredCandidates.map((candidate) => candidate.id), candidates))}>Select visible</Button><Button variant="ghost" size="sm" onClick={() => setSelected([])}>Clear</Button></div></div><div className="flex flex-col gap-2 sm:flex-row"><div className="relative min-w-0 flex-1"><Search className="absolute left-3 top-2.5 size-4 text-slate-400" /><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search park, POTA code, or OSM name" className="bg-white pl-9" /></div><Select value={statusFilter} onValueChange={setStatusFilter}><SelectTrigger className="w-full bg-white sm:w-[170px]"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">All suggestions</SelectItem><SelectItem value="exact">Exact name</SelectItem><SelectItem value="near">Nearby match</SelectItem><SelectItem value="review">Needs review</SelectItem></SelectContent></Select></div></CardHeader><CardContent className="p-0"><div className="hidden grid-cols-[40px_minmax(200px,1.4fr)_minmax(220px,1fr)_100px_100px] gap-4 border-b border-slate-100 bg-slate-50/70 px-5 py-3 text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-400 md:grid"><span /><span>POTA park</span><span>OSM candidate</span><span>Match</span><span>Confidence</span></div><div className="divide-y divide-slate-100">{filteredCandidates.map((candidate) => <CandidateRow key={candidate.id} candidate={candidate} selected={selected.includes(candidate.id)} onToggle={() => toggleCandidate(candidate.id)} onInspect={() => setInspectCandidate(candidate)} />)}{filteredCandidates.length === 0 && <div className="p-10 text-center text-sm text-slate-500">No proposed matches meet this filter.</div>}</div></CardContent><div className="flex flex-col justify-between gap-3 border-t border-slate-100 bg-[#fcfdfe] px-5 py-4 sm:flex-row sm:items-center"><div className="flex items-center gap-2 text-sm text-slate-500"><span className="size-2 rounded-full bg-emerald-500" />Suggestions are read-only until approved</div><Button disabled={!selected.length} onClick={() => setShowUpload(true)} className="bg-[#123d5a] hover:bg-[#0b2e47]">Prepare changeset <ArrowRight className="size-4" /></Button></div></Card>
 
             <div className="mt-6 flex flex-col gap-3 rounded-xl border border-[#cfe2e9] bg-[#eef7fa] px-4 py-3 text-sm text-[#315d6f] sm:flex-row sm:items-center"><ShieldCheck className="size-4 shrink-0 text-[#176b85]" /><p><span className="font-semibold text-[#123d5a]">Safe by default.</span> The generated <code className="rounded bg-white/70 px-1 py-0.5 text-xs">.osc</code> file contains only approved modifications and can be inspected in JOSM before upload.</p><a className="flex shrink-0 items-center gap-1 font-semibold text-[#176b85] hover:underline" href="/docs">Read docs <ExternalLink className="size-3" /></a></div>
           </div></main>

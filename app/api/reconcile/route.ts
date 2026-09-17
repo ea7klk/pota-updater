@@ -70,6 +70,10 @@ function typePriority(type: "node" | "way" | "relation") {
   return type === "relation" ? 2 : type === "way" ? 1 : 0;
 }
 
+function referenceCountry(reference: string) {
+  return reference.split("-")[0]?.trim().toUpperCase() || "";
+}
+
 async function searchPhoton(name: string, country: string, lat: number, lon: number, acquire?: () => Promise<void>) {
   const query = [name, country].filter(Boolean).join(", ");
   const coordinateBias = lat && lon ? "&lat=" + encodeURIComponent(String(lat)) + "&lon=" + encodeURIComponent(String(lon)) : "";
@@ -181,7 +185,9 @@ async function readOverpassElements(response: Response) {
 }
 
 export async function POST(request: Request) {
-  const { country = "DE", region = "Bayern" } = await request.json() as { country?: string; region?: string };
+  const { bbox } = await request.json() as { bbox?: Bbox };
+  if (!bbox || !validBbox(bbox)) return Response.json({ error: "The map bounding box is invalid." }, { status: 400 });
+  if (bboxAreaKm2(bbox) > MAX_BBOX_AREA_KM2) return Response.json({ error: "Zoom in until the visible map covers no more than 20,000 km²." }, { status: 413 });
   const encoder = new TextEncoder();
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -194,17 +200,13 @@ export async function POST(request: Request) {
     const rows = parseCsv(await csvResponse.text());
     const scoped = rows.filter((row) => {
       const reference = pick(row, ["reference", "park_id", "park_code", "code"]);
-      const location = pick(row, ["locationdesc", "location_desc", "location", "region", "state", "province", "subdivision"]);
-      const rowCountry = (pick(row, ["country", "country_code", "countrycode"]) || reference.split("-")[0] || location.split("-")[0]).toUpperCase();
-      const rowRegion = (pick(row, ["region", "state", "province", "subdivision"]) || location.split("-").slice(1).join("-")).toLowerCase();
       const active = pick(row, ["active", "status", "park_status"]).toLowerCase();
-      const requestedRegion = String(region).toLowerCase();
-      return rowCountry === String(country).toUpperCase() && (rowRegion === requestedRegion || rowRegion.endsWith("-" + requestedRegion) || location.toLowerCase().includes(requestedRegion)) && (active === "1" || active === "true" || active === "active");
+      const lat = Number(pick(row, ["latitude", "lat"]));
+      const lon = Number(pick(row, ["longitude", "lon", "lng"]));
+      return Boolean(reference) && (active === "1" || active === "true" || active === "active") && Number.isFinite(lat) && Number.isFinite(lon) && lat >= bbox.south && lat <= bbox.north && lon >= bbox.west && lon <= bbox.east;
     });
     emit({ type: "progress", phase: "loading-overpass", message: "Checking Overpass for parks already tagged in OSM…", completed: 0, total: scoped.length, candidateCount: 0, existing: 0 });
-    const countryCode = String(country).toUpperCase();
-    const regionCode = String(region).toUpperCase();
-    const query = "[out:json][timeout:25];area[\"ISO3166-1\"=\"" + countryCode + "\"][admin_level=2]->.country;area[\"ISO3166-2\"=\"" + countryCode + "-" + regionCode + "\"](area.country)->.region;nwr[\"communication:amateur_radio:pota\"](area.region);out center tags;";
+    const query = "[out:json][timeout:25];nwr[\"communication:amateur_radio:pota\"](" + bbox.south + "," + bbox.west + "," + bbox.north + "," + bbox.east + ");out center tags;";
     let elements: OverpassElement[] = [];
     try {
       const overpassResponse = await fetchWithTimeout("https://overpass.ea7klk.es/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(query), headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" } }, 15000);
@@ -215,7 +217,7 @@ export async function POST(request: Request) {
     const tagged = elements.filter((element) => Object.prototype.hasOwnProperty.call(element.tags ?? {}, "communication:amateur_radio:pota"));
     const existingKeys = new Set(tagged.map((element) => element.type + "/" + element.id));
     const existingNames = new Set(tagged.map((element) => normalize(element.tags?.name ?? "")));
-    const existingRefs = new Set(tagged.map((element) => element.tags?.["communication:amateur_radio:pota"] ?? "").filter(Boolean));
+    const existingRefs = new Set(tagged.flatMap((element) => String(element.tags?.["communication:amateur_radio:pota"] ?? "").split(/[;,]/).map((reference) => reference.trim().toUpperCase()).filter(Boolean)));
     const gates = { photon: createRateGate(300), nominatim: createRateGate(1000), osm: createRateGate(500), photonUnavailable: false };
     const verificationCache = new Map<string, Promise<boolean | null>>();
     const verifyResult = (result: PhotonResult) => {
@@ -226,8 +228,8 @@ export async function POST(request: Request) {
       verificationCache.set(key, verification);
       return verification;
     };
-    const parkRows = scoped.slice(0, 500);
-    emit({ type: "progress", phase: "searching", message: parkRows.length < scoped.length ? "Searching public OSM indexes (the first 500 parks in this scope)…" : "Searching public OSM indexes and checking candidate objects…", completed: 0, total: parkRows.length, candidateCount: 0, existing: tagged.length });
+    const parkRows = scoped.filter((row) => !existingRefs.has(pick(row, ["reference", "park_id", "park_code", "code"]).trim().toUpperCase()));
+    emit({ type: "progress", phase: "searching", message: "Searching public OSM indexes for parks in the displayed map…", completed: 0, total: parkRows.length, candidateCount: 0, existing: existingRefs.size });
     let completed = 0;
     let candidateCount = 0;
     const searched = await mapWithConcurrency(parkRows, 2, async (row, index) => {
@@ -235,6 +237,7 @@ export async function POST(request: Request) {
       const code = pick(row, ["reference", "park_id", "park_code", "code"]) || "POTA-" + (index + 1);
       const lat = Number(pick(row, ["latitude", "lat"])) || 0;
       const lon = Number(pick(row, ["longitude", "lon", "lng"])) || 0;
+      const countryCode = referenceCountry(code);
       const results = await searchOsm(name, countryCode, lat, lon, gates);
       const matches = results.map((result) => {
         const osmName = result.name || result.display_name?.split(",")[0] || "";
@@ -248,19 +251,19 @@ export async function POST(request: Request) {
         const result = match.result;
         const tags = { name: match.osmName, ...(result.extratags ?? {}) };
         return {
-          id: code + "::" + result.osm_type + "::" + result.osm_id, name, code, country: countryCode, region: String(region), lat, lon,
+          id: code + "::" + result.osm_type + "::" + result.osm_id, name, code, country: countryCode, region: pick(row, ["locationdesc", "location_desc", "region", "state", "province", "subdivision"]), lat, lon,
           confidence: Math.min(99, Math.max(35, match.score)), matchType: match.score >= 90 ? "exact" : match.score >= 65 ? "near" : "review",
           osmType: result.osm_type, osmId: String(result.osm_id), osmName: match.osmName, tags,
         };
       });
       completed += 1;
       candidateCount += mappedMatches.length;
-      emit({ type: "progress", phase: "searching", message: "Processed " + completed + " of " + parkRows.length + " scoped parks…", completed, total: parkRows.length, candidateCount, existing: tagged.length });
+      emit({ type: "progress", phase: "searching", message: "Processed " + completed + " of " + parkRows.length + " parks in the displayed map…", completed, total: parkRows.length, candidateCount, existing: existingRefs.size });
       return mappedMatches;
     });
     const candidates = searched.flat();
     candidates.sort((left, right) => typePriority(right.osmType as "node" | "way" | "relation") - typePriority(left.osmType as "node" | "way" | "relation") || Number(right.confidence) - Number(left.confidence));
-    emit({ type: "complete", phase: "complete", message: "Reconciliation complete.", completed: parkRows.length, total: parkRows.length, candidateCount: candidates.length, existing: tagged.length, live: true, candidates, stats: { total: scoped.length, existing: tagged.length, suggestions: candidates.length } });
+    emit({ type: "complete", phase: "complete", message: "Reconciliation complete.", completed: parkRows.length, total: parkRows.length, candidateCount: candidates.length, existing: existingRefs.size, live: true, candidates, stats: { total: parkRows.length, existing: existingRefs.size, suggestions: candidates.length } });
     controller.close();
         } catch (error) {
           emit({ type: "error", phase: "error", message: "Live reconciliation unavailable.", error: error instanceof Error ? error.message : "Live reconciliation unavailable" });
@@ -271,3 +274,4 @@ export async function POST(request: Request) {
   });
   return new Response(stream, { headers: { "cache-control": "no-cache, no-transform", "content-type": "application/x-ndjson; charset=utf-8", connection: "keep-alive" } });
 }
+import { bboxAreaKm2, MAX_BBOX_AREA_KM2, type Bbox, validBbox } from "@/lib/bbox";

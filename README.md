@@ -4,8 +4,8 @@ Review-first web application for reconciling active POTA park records with OpenS
 
 ## Features
 
-- Loads active countries, regions, and parks from the POTA CSV, refreshed every 24 hours.
-- Uses Overpass only to find entities already carrying the POTA tag.
+- Shows active unmapped POTA parks in a Leaflet map, using a 20,000 km² visible-bounding-box limit and Overpass tag detection.
+- Generates candidates only for the confirmed, currently visible map bounding box.
 - Searches Photon and Nominatim for additional OSM candidates, using partial/fuzzy matching and prioritising relations and ways over nodes.
 - Independently verifies candidates against the official OSM object API so already-tagged entities are excluded.
 - Shows multiple candidates per park but permits only one approved candidate per POTA reference.

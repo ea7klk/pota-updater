@@ -14,17 +14,24 @@ participant "Reconciliation route" as API
 participant "POTA CSV" as CSV
 participant "Overpass" as O
 participant "Changeset route" as C
-Contributor -> UI : choose country + region
-Contributor -> UI : click Reconcile sources
-UI -> API : POST /api/reconcile
+Contributor -> UI : pan / zoom Leaflet map
+UI -> API : GET /api/map/parks?bbox=visible
+API -> CSV : GET all_parks_ext.csv
+CSV --> API : active parks in bbox
+API -> O : POST bbox query for tagged refs
+O --> API : mapped POTA references
+API --> UI : unmapped active park markers
+Contributor -> UI : confirm displayed map
+Contributor -> UI : click Find candidates in displayed map
+UI -> API : POST /api/reconcile { bbox }
 API --> UI : progress: fetching CSV
 API -> CSV : GET all_parks_ext.csv
-CSV --> API : active parks
+CSV --> API : active parks in bbox
 API --> UI : progress: loading Overpass
-API -> O : POST query for POTA entities
+API -> O : POST bbox query for POTA entities
 O --> API : JSON entities + tags
-API -> API : normalize names, filter existing, score candidates
-loop each scoped park
+API -> API : exclude mapped refs, normalize names, score candidates
+loop each unmapped park in bbox
   API -> API : throttled Photon/Nominatim search
   API -> API : verify OSM object has no POTA tag
   API --> UI : progress: park counter + candidates
