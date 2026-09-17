@@ -53,6 +53,8 @@ Create the Kubernetes secret in the `pota-updater` namespace after copying the c
 ```sh
 kubectl -n pota-updater create secret generic pota-updater-osm-oauth \
   --from-literal=client-id=the-client-id-from-osm
+
+kubectl -n pota-updater rollout restart deployment/pota-updater
 ```
 
 The reverse proxy must terminate HTTPS and forward requests to the app. The OAuth session cookie is marked `Secure` automatically when the callback is HTTPS.
