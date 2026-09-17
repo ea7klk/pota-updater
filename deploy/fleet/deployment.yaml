@@ -24,9 +24,14 @@ spec:
           env:
             - name: OSM_CLIENT_ID
               valueFrom:
-                secretKeyRef:
+                configMapKeyRef:
                   name: pota-updater-osm-oauth
                   key: client-id
+            - name: OSM_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: pota-updater-osm-oauth
+                  key: client-secret
                   optional: true
             - name: OSM_REDIRECT_URI
               value: https://potaupdater.ea7klk.es/api/osm/callback
