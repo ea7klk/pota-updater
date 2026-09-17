@@ -10,9 +10,10 @@ This app is a review-first workspace for bringing active entries from the POTA e
 4. Candidate matches come from public OpenStreetMap search services: Photon first, with Nominatim as a fallback when Photon is unavailable. Partial names, fuzzy similarity, proximity, and object type are used for ranking; ways and relations are prioritized over nodes. Existing tagged references are excluded.
 5. Search results are independently checked against the OSM object API; any object that already has `communication:amateur_radio:pota` is discarded, even if Overpass did not return it.
 6. Requests are queued with low concurrency and per-source delays so public services are not flooded.
-7. Multiple candidates may be shown for one POTA park, but the review UI allows only one approved candidate per POTA reference.
-8. A contributor approves individual suggestions.
-9. The app generates an OsmChange .osc file containing only approved modifications to existing OSM objects. The file should be inspected in JOSM before upload.
+7. The reconciliation API deduplicates proposals by OSM object (`node`, `way`, or `relation`) and keeps the highest-confidence POTA match, preventing duplicate updates to the same object.
+8. Multiple candidates may be shown for one POTA park, but the review UI allows only one approved candidate per POTA reference and per OSM object.
+9. A contributor approves individual suggestions.
+10. The app generates an OsmChange .osc file containing only approved modifications to existing OSM objects. The file should be inspected in JOSM before upload.
 
 The UI does not fall back to mock candidate data. If live reconciliation cannot verify a candidate safely, it is omitted and the user sees the live-source result instead.
 

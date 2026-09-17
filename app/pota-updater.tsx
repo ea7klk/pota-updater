@@ -26,11 +26,14 @@ const stepLabels = ["Scope", "Reconcile", "Review", "Prepare upload"];
 const initials = (name: string) => name.split(/[ @]/).filter(Boolean).slice(0, 2).map((part) => part[0]).join("").toUpperCase();
 const matchLabel = (type: Candidate["matchType"]) => type === "exact" ? "Exact name" : type === "near" ? "Nearby match" : "Needs review";
 const uniqueSelection = (ids: string[], candidates: Candidate[]) => {
-  const seen = new Set<string>();
+  const seenParks = new Set<string>();
+  const seenEntities = new Set<string>();
   return ids.filter((id) => {
     const candidate = candidates.find((item) => item.id === id);
-    if (!candidate || seen.has(candidate.code)) return false;
-    seen.add(candidate.code);
+    const entity = candidate ? candidate.osmType + "/" + candidate.osmId : "";
+    if (!candidate || seenParks.has(candidate.code) || seenEntities.has(entity)) return false;
+    seenParks.add(candidate.code);
+    seenEntities.add(entity);
     return true;
   });
 };
@@ -67,7 +70,10 @@ export function PotaUpdater() {
     if (current.includes(id)) return current.filter((item) => item !== id);
     const candidate = candidates.find((item) => item.id === id);
     if (!candidate) return current;
-    return [...current.filter((item) => candidates.find((itemCandidate) => itemCandidate.id === item)?.code !== candidate.code), id];
+    return [...current.filter((item) => {
+      const selectedCandidate = candidates.find((itemCandidate) => itemCandidate.id === item);
+      return selectedCandidate?.code !== candidate.code && (selectedCandidate?.osmType + "/" + selectedCandidate?.osmId) !== (candidate.osmType + "/" + candidate.osmId);
+    }), id];
   });
   const updateViewport = (next: MapViewportState) => {
     setViewport(next);

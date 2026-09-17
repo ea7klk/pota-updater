@@ -70,6 +70,16 @@ function typePriority(type: "node" | "way" | "relation") {
   return type === "relation" ? 2 : type === "way" ? 1 : 0;
 }
 
+function deduplicateByOsmEntity<T extends { osmType: "node" | "way" | "relation"; osmId: string; confidence: number }>(proposals: T[]) {
+  const bestByEntity = new Map<string, T>();
+  for (const proposal of proposals) {
+    const key = proposal.osmType + "/" + proposal.osmId;
+    const current = bestByEntity.get(key);
+    if (!current || proposal.confidence > current.confidence) bestByEntity.set(key, proposal);
+  }
+  return Array.from(bestByEntity.values());
+}
+
 function referenceCountry(reference: string) {
   return reference.split("-")[0]?.trim().toUpperCase() || "";
 }
@@ -261,7 +271,7 @@ export async function POST(request: Request) {
       emit({ type: "progress", phase: "searching", message: "Processed " + completed + " of " + parkRows.length + " parks in the displayed map…", completed, total: parkRows.length, candidateCount, existing: existingRefs.size });
       return mappedMatches;
     });
-    const candidates = searched.flat();
+    const candidates = deduplicateByOsmEntity(searched.flat());
     candidates.sort((left, right) => typePriority(right.osmType as "node" | "way" | "relation") - typePriority(left.osmType as "node" | "way" | "relation") || Number(right.confidence) - Number(left.confidence));
     emit({ type: "complete", phase: "complete", message: "Reconciliation complete.", completed: parkRows.length, total: parkRows.length, candidateCount: candidates.length, existing: existingRefs.size, live: true, candidates, stats: { total: parkRows.length, existing: existingRefs.size, suggestions: candidates.length } });
     controller.close();
