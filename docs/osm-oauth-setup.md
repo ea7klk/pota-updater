@@ -24,7 +24,7 @@ POTA → OSM uses OpenStreetMap as its only application identity provider. The a
 
    Leave the remaining permissions unchecked, including diary entries, private GPS traces, GPS uploads, notes, redactions, blocks, messages, and user preferences changes.
 
-7. Save the application. Copy the generated **Client ID**. A client secret is not required by this app because it uses Authorization Code with PKCE.
+7. Save the application. Copy the generated **Client ID**. This app uses Authorization Code with PKCE. If OSM provides a client secret for the application, keep it private and configure it only as a server secret; never commit it.
 
 ## 2. Configure local development
 
@@ -34,6 +34,7 @@ Copy the example environment file to `.env.local` and replace the placeholder:
 
 ```env
 OSM_CLIENT_ID=the-client-id-from-osm
+OSM_CLIENT_SECRET=the-secret-from-osm-if-provided
 OSM_REDIRECT_URI=http://127.0.0.1:5173/api/osm/callback
 ```
 
@@ -48,11 +49,11 @@ OSM_CLIENT_ID=the-client-id-from-osm
 OSM_REDIRECT_URI=https://potaupdater.ea7klk.es/api/osm/callback
 ```
 
-Create the Kubernetes secret in the `pota-updater` namespace after copying the client ID:
+Create the Kubernetes secret in the `pota-updater` namespace after copying the client secret:
 
 ```sh
 kubectl -n pota-updater create secret generic pota-updater-osm-oauth \
-  --from-literal=client-id=the-client-id-from-osm
+  --from-literal=client-secret=the-client-secret-from-osm
 
 kubectl -n pota-updater rollout restart deployment/pota-updater
 ```
