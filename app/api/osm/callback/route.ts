@@ -9,7 +9,10 @@ export async function GET(request: Request) {
   const clientId = process.env.OSM_CLIENT_ID?.trim();
   if (!code || !state || !savedState || state !== savedState || !verifier || !clientId) return new Response("Invalid OSM OAuth callback", { status: 400 });
   const redirectUri = process.env.OSM_REDIRECT_URI || url.origin + "/api/osm/callback";
-  const tokenResponse = await fetch("https://www.openstreetmap.org/oauth2/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ grant_type: "authorization_code", code, client_id: clientId, redirect_uri: redirectUri, code_verifier: verifier }) });
+  const tokenRequest = new URLSearchParams({ grant_type: "authorization_code", code, client_id: clientId, redirect_uri: redirectUri, code_verifier: verifier });
+  const clientSecret = process.env.OSM_CLIENT_SECRET?.trim();
+  if (clientSecret) tokenRequest.set("client_secret", clientSecret);
+  const tokenResponse = await fetch("https://www.openstreetmap.org/oauth2/token", { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: tokenRequest });
   if (!tokenResponse.ok) return new Response("Could not exchange OSM authorization code", { status: 502 });
   const token = await tokenResponse.json() as { access_token?: string };
   if (!token.access_token) return new Response("OSM did not return an access token", { status: 502 });
