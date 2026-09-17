@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pota-updater
+  labels:
+    app.kubernetes.io/name: pota-updater
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pota-updater
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pota-updater
+    spec:
+      containers:
+        - name: pota-updater
+          image: ghcr.io/ea7klk/pota-updater:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 3000
+          env:
+            - name: OSM_CLIENT_ID
+              valueFrom:
+                secretKeyRef:
+                  name: pota-updater-osm-oauth
+                  key: client-id
+                  optional: true
+            - name: OSM_REDIRECT_URI
+              value: https://potaupdater.ea7klk.es/api/osm/callback
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/osm/session
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi

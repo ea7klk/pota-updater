@@ -1,0 +1,4 @@
+defaultNamespace: pota-updater
+keepResources: true
+correctDrift:
+  enabled: true

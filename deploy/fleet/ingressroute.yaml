@@ -1,0 +1,17 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: pota-updater
+  labels:
+    app.kubernetes.io/name: pota-updater
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - kind: Rule
+      match: Host(`potaupdater.ea7klk.es`)
+      services:
+        - name: pota-updater
+          port: 3000
+  tls:
+    certResolver: acmeresolver

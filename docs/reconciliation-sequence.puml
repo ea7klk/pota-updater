@@ -1,0 +1,46 @@
+@startuml
+title POTA to OSM Updater - reconciliation flow
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Arial
+skinparam SequenceLifeLineBorderColor #123D5A
+skinparam SequenceLifeLineBackgroundColor #EEF7FA
+skinparam ArrowColor #176B85
+skinparam ParticipantBorderColor #123D5A
+skinparam ParticipantBackgroundColor #EEF7FA
+actor Contributor
+participant "Browser UI" as UI
+participant "Reconciliation route" as API
+participant "POTA CSV" as CSV
+participant "Overpass" as O
+participant "Changeset route" as C
+Contributor -> UI : choose country + region
+Contributor -> UI : click Reconcile sources
+UI -> API : POST /api/reconcile
+API --> UI : progress: fetching CSV
+API -> CSV : GET all_parks_ext.csv
+CSV --> API : active parks
+API --> UI : progress: loading Overpass
+API -> O : POST query for POTA entities
+O --> API : JSON entities + tags
+API -> API : normalize names, filter existing, score candidates
+loop each scoped park
+  API -> API : throttled Photon/Nominatim search
+  API -> API : verify OSM object has no POTA tag
+  API --> UI : progress: park counter + candidates
+end
+API --> UI : complete: suggestions + confidence
+UI --> Contributor : show review queue
+loop each proposed match
+  Contributor -> UI : approve or clear
+end
+Contributor -> UI : prepare changeset
+UI -> C : POST approved candidates
+C --> UI : OsmChange XML
+UI --> Contributor : download .osc
+note over Contributor,UI
+  Import into JOSM or another editor,
+  inspect changes, then upload under
+  the contributor's own OSM session.
+end note
+@enduml
